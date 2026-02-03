@@ -91,3 +91,6 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 
+# Python virtual environments
+venv/
+.venv/

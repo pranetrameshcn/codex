@@ -83,4 +83,101 @@ The bridge spawns `codex app-server` as a subprocess and translates:
 | `CODEX_WORKING_DIR` | No | current dir | Working directory |
 | `HOST` | No | 0.0.0.0 | Server bind address |
 | `PORT` | No | 8000 | Server port |
+| `DEBUG` | No | false | Enable auto-reload |
 | `LOG_LEVEL` | No | INFO | Logging level |
+
+## Detailed Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Codex binary built from `codex-rs/`
+
+### 1. Build Codex (if not already)
+
+```bash
+cd ../codex-rs
+cargo build --release
+```
+
+Binary location:
+- Linux/Mac: `codex-rs/target/release/codex`
+- Windows: `codex-rs/target/release/codex.exe`
+
+### 2. Install dependencies
+
+**With uv (fast):**
+```bash
+uv venv
+uv pip install -e .
+```
+
+**With pip:**
+```bash
+# Create venv
+python -m venv .venv
+
+# Activate (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# Activate (Linux/Mac)
+source .venv/bin/activate
+
+# Install
+pip install -e .
+```
+
+### 3. Configure .env
+
+```bash
+cp .env.example .env
+```
+
+Example `.env`:
+```env
+# REQUIRED
+OPENAI_API_KEY=sk-your-key-here
+
+# OPTIONAL - set if codex is not in PATH
+CODEX_BINARY_PATH=C:\path\to\codex-rs\target\release\codex.exe
+
+# OPTIONAL - working directory for agent
+CODEX_WORKING_DIR=C:\your\project
+
+# Server
+HOST=0.0.0.0
+PORT=8000
+DEBUG=true
+LOG_LEVEL=INFO
+```
+
+### 4. Run
+
+**Development (auto-reload):**
+```bash
+# Set DEBUG=true in .env
+python -m src.main
+
+# Or with uv
+uv run python -m src.main
+```
+
+**Production:**
+```bash
+# Set DEBUG=false in .env
+python -m src.main
+
+# Or with gunicorn (Linux)
+gunicorn src.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
+```
+
+### 5. Verify
+
+```bash
+curl http://localhost:8000/status
+```
+
+Should return:
+```json
+{"status":"ok","codex_available":true,"codex_version":"...","api_key_configured":true}
+```

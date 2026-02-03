@@ -179,6 +179,9 @@ async def get_history(
 async def sse_stream(thread_id: str, prompt: str, model: Optional[str]) -> AsyncIterator[str]:
     """Generate SSE events from turn."""
     try:
+        # Always send thread_id first so client knows which thread they're on
+        yield f"data: {json.dumps({'type': 'session', 'thread_id': thread_id})}\n\n"
+
         async for event in client.turn_start_stream(thread_id, prompt, model):
             yield f"data: {json.dumps(event)}\n\n"
 
@@ -191,7 +194,7 @@ async def sse_stream(thread_id: str, prompt: str, model: Optional[str]) -> Async
 
     except Exception as e:
         logger.exception(f"Stream error: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'thread_id': thread_id, 'message': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
 
@@ -217,8 +220,11 @@ async def chat(request: ChatRequest):
             # Continue existing thread
             logger.debug(f"Resuming thread: {request.thread_id}")
             try:
-                await client.thread_resume(request.thread_id)
-                thread_id = request.thread_id
+                result = await client.thread_resume(request.thread_id)
+                # Always use ID from Codex response, not user input
+                thread_id = result.get("thread", {}).get("id")
+                if not thread_id:
+                    raise HTTPException(status_code=500, detail="Failed to resume thread")
             except RuntimeError as e:
                 if "not found" in str(e).lower():
                     raise HTTPException(status_code=404, detail=f"Thread not found: {request.thread_id}")
@@ -227,6 +233,7 @@ async def chat(request: ChatRequest):
             # Create new thread
             logger.debug("Creating new thread")
             result = await client.thread_start(model=request.model)
+            # Always use ID from Codex response
             thread_id = result.get("thread", {}).get("id")
             if not thread_id:
                 raise HTTPException(status_code=500, detail="Failed to create thread")
