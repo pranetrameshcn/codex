@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer <access_token>" http://localhost:8000/threads
 When `SECURITY_METHOD=Keycloak` is set, the bridge operates in multi-user mode:
 
 - Each user (identified by the JWT `sub` claim) gets their own `codex app-server` subprocess
-- User data is isolated under `{BASE_DATA_DIR}/users/{user_id}/.codex/`
+- User data is isolated under `{BASE_DATA_DIR}/users/{user_id}/`
 - Sessions are created on first request and cleaned up after `IDLE_TIMEOUT_SECONDS` of inactivity
 - The `MAX_SESSIONS` setting caps the total number of concurrent user sessions (HTTP 503 when full)
 
@@ -130,8 +130,8 @@ When `SECURITY_METHOD=None` (default), all requests use a single `default` user 
 ```
 {BASE_DATA_DIR}/
 └── users/
-    ├── {user_id_1}/.codex/    # CODEX_HOME for user 1
-    ├── {user_id_2}/.codex/    # CODEX_HOME for user 2
+    ├── {user_id_1}/    # CODEX_HOME for user 1
+    ├── {user_id_2}/    # CODEX_HOME for user 2
     └── ...
 ```
 

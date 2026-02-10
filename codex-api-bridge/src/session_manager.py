@@ -9,7 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from .app_server_client import AppServerClient
 from .config import settings
@@ -22,7 +22,7 @@ class UserSession:
     """Tracks a single user's codex app-server session."""
     user_id: str
     client: AppServerClient
-    codex_home: Path
+    codex_home: Optional[Path]
     created_at: float = field(default_factory=time.monotonic)
     last_activity: float = field(default_factory=time.monotonic)
 
@@ -104,19 +104,24 @@ class SessionManager:
         """Create a new user session with isolated CODEX_HOME."""
         codex_home = settings.get_user_codex_home(user_id)
 
-        # Create user directory if it doesn't exist
-        try:
-            codex_home.mkdir(parents=True, exist_ok=True)
+        # Create user directory if needed (None means default user using built-in ~/.codex)
+        if codex_home is not None:
+            try:
+                codex_home.mkdir(parents=True, exist_ok=True)
+                logger.info(
+                    "Created CODEX_HOME for user %s: %s", user_id, codex_home
+                )
+            except OSError as e:
+                logger.error(
+                    "Failed to create CODEX_HOME for user %s: %s", user_id, e
+                )
+                raise RuntimeError(
+                    f"Failed to create user directory: {e}"
+                ) from e
+        else:
             logger.info(
-                "Created CODEX_HOME for user %s: %s", user_id, codex_home
+                "Using built-in CODEX_HOME for user %s", user_id
             )
-        except OSError as e:
-            logger.error(
-                "Failed to create CODEX_HOME for user %s: %s", user_id, e
-            )
-            raise RuntimeError(
-                f"Failed to create user directory: {e}"
-            ) from e
 
         # Create per-user client with user-specific environment
         client = AppServerClient(

@@ -15,6 +15,11 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class RenameRequest(BaseModel):
+    """Request for PATCH /threads/{thread_id}."""
+    name: str
+
+
 class ChatRequest(BaseModel):
     """Request for POST /chat."""
     thread_id: Optional[str] = None  # None = new conversation

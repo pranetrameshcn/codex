@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     codex_working_dir: Optional[Path] = None
 
     # Multi-user settings
-    base_data_dir: Path = Path("./data/codex")
+    base_data_dir: Path = Path("./data")
     max_sessions: int = 50
     idle_timeout_seconds: int = 300
     cleanup_interval_seconds: int = 60
@@ -76,24 +76,35 @@ class Settings(BaseSettings):
             env["OPENAI_API_KEY"] = self.openai_api_key
         return env
 
-    def get_user_codex_home(self, user_id: str) -> Path:
+    def get_user_codex_home(self, user_id: str) -> Optional[Path]:
         """Get CODEX_HOME directory for a specific user.
 
-        Returns {base_data_dir}/users/{user_id}/.codex/
-        For the 'default' user in single-user mode, respects CODEX_HOME env var.
+        Returns:
+            Path for non-default users: {base_data_dir}/users/{user_id}/.codex/
+            Path for 'default' user with CODEX_HOME env var: that path
+            None for 'default' user without CODEX_HOME: let codex use its built-in default
         """
         if user_id == "default":
             env_home = os.environ.get("CODEX_HOME")
             if env_home:
                 return Path(env_home)
-        return self.base_data_dir / "users" / user_id / ".codex"
+            return None
+        return self.base_data_dir / "users" / user_id
 
     def get_user_subprocess_env(self, user_id: str) -> dict:
-        """Get environment for a user's app-server subprocess."""
+        """Get environment for a user's app-server subprocess.
+
+        For the 'default' user without explicit CODEX_HOME, this is
+        identical to get_subprocess_env() — preserving pre-multi-user behavior.
+        """
+        if user_id == "default" and not os.environ.get("CODEX_HOME"):
+            return self.get_subprocess_env()
         env = os.environ.copy()
         if self.openai_api_key:
             env["OPENAI_API_KEY"] = self.openai_api_key
-        env["CODEX_HOME"] = str(self.get_user_codex_home(user_id))
+        codex_home = self.get_user_codex_home(user_id)
+        if codex_home is not None:
+            env["CODEX_HOME"] = str(codex_home)
         return env
 
     def get_keycloak_introspection_url(self) -> str:

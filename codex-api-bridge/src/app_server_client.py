@@ -1,11 +1,13 @@
 """
 Minimal JSON-RPC client for codex app-server.
 
-Handles the 4 core operations:
+Handles core operations:
 - thread/start (new chat)
 - thread/resume (continue chat)
 - thread/list (list chats)
 - thread/read (get history)
+- thread/name/set (rename thread)
+- thread/archive (delete/archive thread)
 - turn/start (send message)
 """
 import asyncio
@@ -217,6 +219,41 @@ class AppServerClient:
 
         if "error" in response:
             raise RuntimeError(f"thread/read failed: {response['error']}")
+
+        return response.get("result", {})
+
+    async def thread_rename(self, thread_id: str, name: str) -> Dict[str, Any]:
+        """
+        Rename a thread.
+
+        Returns: result from thread/name/set RPC
+        """
+        await self._ensure_connected()
+
+        response = await self._send_request("thread/name/set", {
+            "threadId": thread_id,
+            "name": name,
+        })
+
+        if "error" in response:
+            raise RuntimeError(f"thread/name/set failed: {response['error']}")
+
+        return response.get("result", {})
+
+    async def thread_archive(self, thread_id: str) -> Dict[str, Any]:
+        """
+        Archive (soft-delete) a thread.
+
+        Returns: result from thread/archive RPC
+        """
+        await self._ensure_connected()
+
+        response = await self._send_request("thread/archive", {
+            "threadId": thread_id,
+        })
+
+        if "error" in response:
+            raise RuntimeError(f"thread/archive failed: {response['error']}")
 
         return response.get("result", {})
 
