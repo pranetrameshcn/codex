@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     model: Optional[str] = None
     stream: bool = True
+    user_id: Optional[str] = None  # Optional: override user_id from body
 
     def get_prompt(self) -> str:
         """Combine messages into prompt."""

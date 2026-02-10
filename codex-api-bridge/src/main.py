@@ -48,21 +48,21 @@ def get_user_id(request: Request) -> str:
 
     Resolution order:
     1. Keycloak JWT 'sub' claim (always wins when auth is active)
-    2. Query param ?user_id= or X-User-Id header (when ALLOW_USER_ID_OVERRIDE=true)
-    3. 'default'
+    2. Query param ?user_id= or X-User-Id header (when multi-user is active)
+    3. Single-user mode: return 'default'
+       Multi-user mode: reject with 400
     """
     auth = getattr(request.state, "auth", None)
     if auth and auth.get("sub"):
         return auth["sub"]
-    if settings.security_method == "Keycloak":
-        logger.warning(
-            "Keycloak auth active but no 'sub' claim found in token for %s",
-            request.url.path,
-        )
-    if settings.allow_user_id_override:
+    if settings.is_multi_user:
         uid = request.query_params.get("user_id") or request.headers.get("X-User-Id")
         if uid and uid.strip():
             return uid.strip()
+        raise HTTPException(
+            status_code=400,
+            detail="user_id is required. Provide via query param (?user_id=), X-User-Id header, or request body.",
+        )
     return "default"
 
 
@@ -347,7 +347,14 @@ async def chat(request: Request, body: ChatRequest):
     - stream=true (default): Returns SSE stream
     - stream=false: Returns complete response
     """
-    user_id = get_user_id(request)
+    # For /chat, body.user_id is also accepted as a fallback
+    try:
+        user_id = get_user_id(request)
+    except HTTPException:
+        if body.user_id and body.user_id.strip():
+            user_id = body.user_id.strip()
+        else:
+            raise
     logger.info("Chat (user=%s, thread_id=%s, messages=%d)", user_id, body.thread_id, len(body.messages))
 
     prompt = body.get_prompt()
