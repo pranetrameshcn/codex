@@ -28,7 +28,7 @@ from .models import (
     ThreadInfo,
     ThreadsResponse,
 )
-from .app_server_client import client
+from .session_manager import session_manager
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +38,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def get_user_id(request: Request) -> str:
+    """Extract user_id from authenticated request.
+
+    Returns 'default' when authentication is disabled.
+    """
+    auth = getattr(request.state, "auth", None)
+    if auth and auth.get("sub"):
+        return auth["sub"]
+    if settings.security_method == "Keycloak":
+        logger.warning(
+            "Keycloak auth active but no 'sub' claim found in token for %s",
+            request.url.path,
+        )
+    return "default"
+
+
+# =============================================================================
+# Middleware
+# =============================================================================
 
 class KeycloakAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -78,18 +102,25 @@ class KeycloakAuthMiddleware(BaseHTTPMiddleware):
             "raw": data,
         }
 
-        subject = data.get("sub") or data.get("username")
-        logger.info("Authenticated request: %s", subject or "unknown")
+        logger.info(
+            "Authenticated request: user=%s path=%s",
+            data.get("sub") or data.get("username") or "unknown",
+            request.url.path,
+        )
 
         return await call_next(request)
 
+
+# =============================================================================
+# Lifespan
+# =============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown."""
     logger.info("Starting Codex API Bridge")
 
-    # Check configuration
+    # Log configuration
     if settings.openai_api_key:
         logger.info("OpenAI API key: configured")
     else:
@@ -108,18 +139,36 @@ async def lifespan(app: FastAPI):
         ):
             logger.warning("Keycloak is not fully configured; authentication will fail.")
 
-    available, version = client.check_availability()
+    # Check codex binary availability
+    from .app_server_client import AppServerClient
+    temp_client = AppServerClient()
+    available, version = temp_client.check_availability()
     if available:
-        logger.info(f"Codex binary: {version}")
+        logger.info("Codex binary: %s", version)
     else:
         logger.warning("Codex binary not found!")
+
+    # Log multi-user settings
+    logger.info(
+        "Multi-user: base_data_dir=%s, max_sessions=%d, idle_timeout=%ds",
+        settings.base_data_dir,
+        settings.max_sessions,
+        settings.idle_timeout_seconds,
+    )
+
+    # Start session cleanup loop
+    await session_manager.start_cleanup_loop()
 
     yield
 
     # Shutdown
     logger.info("Shutting down")
-    await client.close()
+    await session_manager.shutdown()
 
+
+# =============================================================================
+# App
+# =============================================================================
 
 app = FastAPI(
     title="Codex API Bridge",
@@ -161,7 +210,9 @@ async def root():
 @app.get("/status", response_model=StatusResponse)
 async def get_status():
     """Health check and status."""
-    available, version = client.check_availability()
+    from .app_server_client import AppServerClient
+    temp_client = AppServerClient()
+    available, version = temp_client.check_availability()
 
     if available and settings.openai_api_key:
         status = "ok"
@@ -180,14 +231,17 @@ async def get_status():
 
 @app.get("/threads", response_model=ThreadsResponse)
 async def list_threads(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: Optional[str] = Query(default=None),
 ):
-    """List all conversation threads."""
-    logger.info(f"Listing threads (limit={limit})")
+    """List all conversation threads for the authenticated user."""
+    user_id = get_user_id(request)
+    logger.info("Listing threads (user=%s, limit=%d)", user_id, limit)
 
     try:
-        result = await client.thread_list(limit=limit, cursor=cursor)
+        user_client = await session_manager.get_client(user_id)
+        result = await user_client.thread_list(limit=limit, cursor=cursor)
 
         threads = []
         for item in result.get("data", []):
@@ -203,20 +257,29 @@ async def list_threads(
             next_cursor=result.get("nextCursor"),
         )
 
+    except RuntimeError as e:
+        if "Maximum concurrent sessions" in str(e):
+            raise HTTPException(status_code=503, detail=str(e))
+        logger.exception("Failed to list threads: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
     except Exception as e:
-        logger.exception(f"Failed to list threads: {e}")
+        logger.exception("Failed to list threads: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/history", response_model=ThreadHistoryResponse)
 async def get_history(
+    request: Request,
     thread_id: str = Query(..., description="Thread ID"),
 ):
     """Get conversation history for a thread."""
-    logger.info(f"Getting history for: {thread_id}")
+    user_id = get_user_id(request)
+    logger.info("Getting history (user=%s, thread=%s)", user_id, thread_id)
 
     try:
-        result = await client.thread_read(thread_id)
+        user_client = await session_manager.get_client(user_id)
+        result = await user_client.thread_read(thread_id)
         thread = result.get("thread", {})
 
         return ThreadHistoryResponse(
@@ -230,21 +293,28 @@ async def get_history(
         error_msg = str(e)
         if "not found" in error_msg.lower():
             raise HTTPException(status_code=404, detail=f"Thread not found: {thread_id}")
-        logger.exception(f"Failed to get history: {e}")
+        if "Maximum concurrent sessions" in error_msg:
+            raise HTTPException(status_code=503, detail=error_msg)
+        logger.exception("Failed to get history: %s", e)
         raise HTTPException(status_code=500, detail=error_msg)
 
     except Exception as e:
-        logger.exception(f"Failed to get history: {e}")
+        logger.exception("Failed to get history: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def sse_stream(thread_id: str, prompt: str, model: Optional[str]) -> AsyncIterator[str]:
+async def sse_stream(
+    user_client,
+    thread_id: str,
+    prompt: str,
+    model: Optional[str],
+) -> AsyncIterator[str]:
     """Generate SSE events from turn."""
     try:
         # Always send thread_id first so client knows which thread they're on
         yield f"data: {json.dumps({'type': 'session', 'thread_id': thread_id})}\n\n"
 
-        async for event in client.turn_start_stream(thread_id, prompt, model):
+        async for event in user_client.turn_start_stream(thread_id, prompt, model):
             yield f"data: {json.dumps(event)}\n\n"
 
             # Stop on completion or error
@@ -255,13 +325,13 @@ async def sse_stream(thread_id: str, prompt: str, model: Optional[str]) -> Async
         yield "data: [DONE]\n\n"
 
     except Exception as e:
-        logger.exception(f"Stream error: {e}")
+        logger.exception("Stream error: %s", e)
         yield f"data: {json.dumps({'type': 'error', 'thread_id': thread_id, 'message': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+async def chat(request: Request, body: ChatRequest):
     """
     Send a message and get response.
 
@@ -270,41 +340,39 @@ async def chat(request: ChatRequest):
     - stream=true (default): Returns SSE stream
     - stream=false: Returns complete response
     """
-    logger.info(f"Chat: thread_id={request.thread_id}, messages={len(request.messages)}")
+    user_id = get_user_id(request)
+    logger.info("Chat (user=%s, thread_id=%s, messages=%d)", user_id, body.thread_id, len(body.messages))
 
-    prompt = request.get_prompt()
+    prompt = body.get_prompt()
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="Empty message")
 
     try:
+        user_client = await session_manager.get_client(user_id)
+
         # Get or create thread
-        if request.thread_id:
-            # Continue existing thread
-            logger.debug(f"Resuming thread: {request.thread_id}")
+        if body.thread_id:
+            logger.debug("Resuming thread: %s", body.thread_id)
             try:
-                result = await client.thread_resume(request.thread_id)
-                # Always use ID from Codex response, not user input
+                result = await user_client.thread_resume(body.thread_id)
                 thread_id = result.get("thread", {}).get("id")
                 if not thread_id:
                     raise HTTPException(status_code=500, detail="Failed to resume thread")
             except RuntimeError as e:
                 if "not found" in str(e).lower():
-                    raise HTTPException(status_code=404, detail=f"Thread not found: {request.thread_id}")
+                    raise HTTPException(status_code=404, detail=f"Thread not found: {body.thread_id}")
                 raise
         else:
-            # Create new thread
             logger.debug("Creating new thread")
-            result = await client.thread_start(model=request.model)
-            # Always use ID from Codex response
+            result = await user_client.thread_start(model=body.model)
             thread_id = result.get("thread", {}).get("id")
             if not thread_id:
                 raise HTTPException(status_code=500, detail="Failed to create thread")
-            logger.info(f"Created thread: {thread_id}")
+            logger.info("Created thread: %s (user=%s)", thread_id, user_id)
 
-        if request.stream:
-            # Return SSE stream
+        if body.stream:
             return StreamingResponse(
-                sse_stream(thread_id, prompt, request.model),
+                sse_stream(user_client, thread_id, prompt, body.model),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -313,14 +381,11 @@ async def chat(request: ChatRequest):
                 }
             )
         else:
-            # Collect all events and return final response
             events = []
             final_message = None
 
-            async for event in client.turn_start_stream(thread_id, prompt, request.model):
+            async for event in user_client.turn_start_stream(thread_id, prompt, body.model):
                 events.append(event)
-
-                # Extract agent message
                 if event.get("method") == "item/completed":
                     item = event.get("params", {}).get("item", {})
                     if item.get("type") == "agentMessage":
@@ -334,8 +399,13 @@ async def chat(request: ChatRequest):
 
     except HTTPException:
         raise
+    except RuntimeError as e:
+        if "Maximum concurrent sessions" in str(e):
+            raise HTTPException(status_code=503, detail=str(e))
+        logger.exception("Chat failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.exception(f"Chat failed: {e}")
+        logger.exception("Chat failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # Working directory for Codex sessions
     codex_working_dir: Optional[Path] = None
 
+    # Multi-user settings
+    base_data_dir: Path = Path("./data/codex")
+    max_sessions: int = 50
+    idle_timeout_seconds: int = 300
+    cleanup_interval_seconds: int = 60
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
@@ -67,6 +73,26 @@ class Settings(BaseSettings):
         env = os.environ.copy()
         if self.openai_api_key:
             env["OPENAI_API_KEY"] = self.openai_api_key
+        return env
+
+    def get_user_codex_home(self, user_id: str) -> Path:
+        """Get CODEX_HOME directory for a specific user.
+
+        Returns {base_data_dir}/users/{user_id}/.codex/
+        For the 'default' user in single-user mode, respects CODEX_HOME env var.
+        """
+        if user_id == "default":
+            env_home = os.environ.get("CODEX_HOME")
+            if env_home:
+                return Path(env_home)
+        return self.base_data_dir / "users" / user_id / ".codex"
+
+    def get_user_subprocess_env(self, user_id: str) -> dict:
+        """Get environment for a user's app-server subprocess."""
+        env = os.environ.copy()
+        if self.openai_api_key:
+            env["OPENAI_API_KEY"] = self.openai_api_key
+        env["CODEX_HOME"] = str(self.get_user_codex_home(user_id))
         return env
 
     def get_keycloak_introspection_url(self) -> str:

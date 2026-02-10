@@ -66,13 +66,16 @@ curl -X POST http://localhost:8000/chat \
 ## Architecture
 
 ```
-HTTP Client ──► FastAPI Bridge ──► codex app-server (JSON-RPC/stdio)
-     ◄── SSE ──────┘                      └── Notifications ──┘
+HTTP Client ──► FastAPI Bridge ──► SessionManager ──► codex app-server (JSON-RPC/stdio)
+     ◄── SSE ──────┘                    │                   └── Notifications ──┘
+                                         └── per-user AppServerClient instances
 ```
 
-The bridge spawns `codex app-server` as a subprocess and translates:
-- HTTP requests → JSON-RPC requests (stdin)
+The bridge manages per-user `codex app-server` subprocesses via the `SessionManager`:
+- Each authenticated user gets their own subprocess with isolated `CODEX_HOME`
+- HTTP requests → routed by user_id → JSON-RPC requests (stdin)
 - JSON-RPC responses/notifications (stdout) → HTTP responses/SSE
+- Idle sessions are automatically cleaned up after the configured timeout
 
 ## Configuration
 
@@ -85,6 +88,10 @@ The bridge spawns `codex app-server` as a subprocess and translates:
 | `PORT` | No | 8000 | Server port |
 | `DEBUG` | No | false | Enable auto-reload |
 | `LOG_LEVEL` | No | INFO | Logging level |
+| `BASE_DATA_DIR` | No | ./data/codex | Base directory for per-user data |
+| `MAX_SESSIONS` | No | 50 | Maximum concurrent user sessions |
+| `IDLE_TIMEOUT_SECONDS` | No | 300 | Seconds before idle sessions are cleaned up |
+| `CLEANUP_INTERVAL_SECONDS` | No | 60 | Interval between cleanup sweeps |
 
 ## Security (Keycloak)
 
@@ -104,6 +111,27 @@ Optional:
 Example:
 ```bash
 curl -H "Authorization: Bearer <access_token>" http://localhost:8000/threads
+```
+
+## Multi-User Mode
+
+When `SECURITY_METHOD=Keycloak` is set, the bridge operates in multi-user mode:
+
+- Each user (identified by the JWT `sub` claim) gets their own `codex app-server` subprocess
+- User data is isolated under `{BASE_DATA_DIR}/users/{user_id}/.codex/`
+- Sessions are created on first request and cleaned up after `IDLE_TIMEOUT_SECONDS` of inactivity
+- The `MAX_SESSIONS` setting caps the total number of concurrent user sessions (HTTP 503 when full)
+
+When `SECURITY_METHOD=None` (default), all requests use a single `default` user session, preserving backwards compatibility.
+
+### Data Directory Structure
+
+```
+{BASE_DATA_DIR}/
+└── users/
+    ├── {user_id_1}/.codex/    # CODEX_HOME for user 1
+    ├── {user_id_2}/.codex/    # CODEX_HOME for user 2
+    └── ...
 ```
 
 ## Detailed Setup

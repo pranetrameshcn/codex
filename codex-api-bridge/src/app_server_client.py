@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import subprocess
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional
 
 from .config import settings
@@ -22,11 +23,17 @@ logger = logging.getLogger(__name__)
 class AppServerClient:
     """Simple client for codex app-server JSON-RPC over stdio."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        subprocess_env: Optional[Dict[str, str]] = None,
+        working_dir: Optional[Path] = None,
+    ):
         self._process: Optional[asyncio.subprocess.Process] = None
         self._request_id: int = 0
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._subprocess_env = subprocess_env
+        self._working_dir = working_dir
 
     async def _ensure_connected(self):
         """Start app-server process if not running."""
@@ -35,7 +42,8 @@ class AppServerClient:
 
         logger.info("Starting codex app-server process")
         codex_binary = settings.get_codex_binary()
-        cwd = settings.get_working_dir()
+        cwd = self._working_dir or settings.get_working_dir()
+        env = self._subprocess_env or settings.get_subprocess_env()
 
         self._process = await asyncio.create_subprocess_exec(
             codex_binary, "app-server",
@@ -43,7 +51,7 @@ class AppServerClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd),
-            env=settings.get_subprocess_env(),
+            env=env,
         )
 
         # Initialize connection (required by app-server protocol)
@@ -310,6 +318,10 @@ class AppServerClient:
                 self._process.kill()
             self._process = None
             self._initialized = False
+
+    def is_alive(self) -> bool:
+        """Check if the app-server process is still running."""
+        return self._process is not None and self._process.returncode is None
 
 
 # Global client instance
