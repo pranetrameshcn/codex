@@ -139,6 +139,109 @@ INFO - Uvicorn running on http://0.0.0.0:8000
 
 ---
 
+## Security Mode Test Matrix
+
+This section covers testing all supported security modes and user_id override configurations.
+
+### Mode A: SECURITY_METHOD=None (default, single-user)
+
+**Env:**
+```env
+SECURITY_METHOD=None
+ALLOW_USER_ID_OVERRIDE=false
+```
+
+**Expected behavior:**
+- No Authorization header required
+- `user_id` is ignored
+- All requests use the single `default` session
+
+**Smoke test:**
+```bash
+curl http://localhost:8000/threads
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"content": "Hello"}], "stream": false}'
+```
+
+### Mode B: SECURITY_METHOD=None + user_id override (multi-user without Keycloak)
+
+**Env:**
+```env
+SECURITY_METHOD=None
+ALLOW_USER_ID_OVERRIDE=true
+```
+
+**Expected behavior:**
+- No Authorization header required
+- `user_id` required via query/header/body
+- Requests are routed by `user_id`
+
+**Smoke test (query param):**
+```bash
+curl "http://localhost:8000/threads?user_id=test-user-1"
+```
+
+**Smoke test (header):**
+```bash
+curl http://localhost:8000/threads \
+  -H "X-User-Id: test-user-1"
+```
+
+**Smoke test (body for /chat):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "test-user-1", "messages": [{"content": "Hello"}], "stream": false}'
+```
+
+**Expected errors:**
+- Missing `user_id` in multi-user (override) mode: `400`
+
+### Mode C: SECURITY_METHOD=Keycloak (Keycloak + MongoDB user validation)
+
+**Env:**
+```env
+SECURITY_METHOD=Keycloak
+KEYCLOAK_BASE_URL=...
+KEYCLOAK_REALM=...
+KEYCLOAK_CLIENT_ID=...
+KEYCLOAK_CLIENT_SECRET=...
+USER_MONGODB_URL=...
+USER_MONGODB_DATABASE=users
+USER_MONGODB_COLLECTION=users
+```
+
+**Expected behavior:**
+- Authorization header is required
+- `user_id` is required via query/header/body
+- Request is allowed only when:
+  - JWT `sub` == user document `keycloak_id`
+  - provided `user_id` == user document `_id` (ObjectId)
+
+**Smoke test (header user_id):**
+```bash
+curl http://localhost:8000/threads \
+  -H "Authorization: Bearer <access_token>" \
+  -H "X-User-Id: <app_user_id>"
+```
+
+**Smoke test (/chat user_id in body):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "<app_user_id>", "messages": [{"content": "Hello"}], "stream": false}'
+```
+
+**Expected errors:**
+- Missing Authorization header: `401`
+- Missing `user_id`: `400`
+- No MongoDB user match: `403`
+- MongoDB unavailable or not configured: `503`
+
+---
+
 ## Endpoints
 
 ### 1. GET / - API Info
@@ -198,12 +301,24 @@ curl http://localhost:8000/status
 
 Returns a list of conversation threads.
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl http://localhost:8000/threads
 ```
 
-**With pagination:**
+**Mode B (None + user_id override):**
+```bash
+curl "http://localhost:8000/threads?user_id=test-user-1"
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl http://localhost:8000/threads \
+  -H "Authorization: Bearer <access_token>" \
+  -H "X-User-Id: <app_user_id>"
+```
+
+**With pagination (Mode B/C):**
 ```bash
 curl "http://localhost:8000/threads?limit=10"
 curl "http://localhost:8000/threads?limit=10&cursor=CURSOR_FROM_PREVIOUS"
@@ -240,9 +355,21 @@ curl "http://localhost:8000/threads?limit=10&cursor=CURSOR_FROM_PREVIOUS"
 
 Returns full history for a specific thread.
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID"
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID&user_id=test-user-1"
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "X-User-Id: <app_user_id>"
 ```
 
 **Expected Response:**
@@ -288,11 +415,32 @@ Send a message to start a new conversation or continue an existing one.
 
 #### 5a. New Conversation (Streaming)
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl -N -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
+    "messages": [{"content": "Hello, who are you?"}]
+  }'
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl -N -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test-user-1",
+    "messages": [{"content": "Hello, who are you?"}]
+  }'
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl -N -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<app_user_id>",
     "messages": [{"content": "Hello, who are you?"}]
   }'
 ```
@@ -333,11 +481,34 @@ data: [DONE]
 
 #### 5b. New Conversation (Non-Streaming)
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
+    "messages": [{"content": "What is 2+2?"}],
+    "stream": false
+  }'
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test-user-1",
+    "messages": [{"content": "What is 2+2?"}],
+    "stream": false
+  }'
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<app_user_id>",
     "messages": [{"content": "What is 2+2?"}],
     "stream": false
   }'
@@ -371,11 +542,34 @@ curl -X POST http://localhost:8000/chat \
 
 #### 5c. Continue Conversation (Streaming)
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl -N -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
+    "thread_id": "YOUR_THREAD_ID",
+    "messages": [{"content": "Now multiply that by 3"}]
+  }'
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl -N -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test-user-1",
+    "thread_id": "YOUR_THREAD_ID",
+    "messages": [{"content": "Now multiply that by 3"}]
+  }'
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl -N -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<app_user_id>",
     "thread_id": "YOUR_THREAD_ID",
     "messages": [{"content": "Now multiply that by 3"}]
   }'
@@ -397,11 +591,36 @@ curl -N -X POST http://localhost:8000/chat \
 
 #### 5d. Continue Conversation (Non-Streaming)
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
+    "thread_id": "YOUR_THREAD_ID",
+    "messages": [{"content": "Now multiply that by 3"}],
+    "stream": false
+  }'
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test-user-1",
+    "thread_id": "YOUR_THREAD_ID",
+    "messages": [{"content": "Now multiply that by 3"}],
+    "stream": false
+  }'
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<app_user_id>",
     "thread_id": "YOUR_THREAD_ID",
     "messages": [{"content": "Now multiply that by 3"}],
     "stream": false
@@ -425,11 +644,36 @@ curl -X POST http://localhost:8000/chat \
 
 #### 5e. With Model Override
 
-**Request:**
+**Mode A (SECURITY_METHOD=None):**
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
+    "messages": [{"content": "Hello"}],
+    "model": "gpt-4o",
+    "stream": false
+  }'
+```
+
+**Mode B (None + user_id override):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test-user-1",
+    "messages": [{"content": "Hello"}],
+    "model": "gpt-4o",
+    "stream": false
+  }'
+```
+
+**Mode C (Keycloak + MongoDB):**
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<app_user_id>",
     "messages": [{"content": "Hello"}],
     "model": "gpt-4o",
     "stream": false

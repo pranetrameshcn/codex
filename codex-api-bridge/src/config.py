@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     keycloak_client_secret: Optional[str] = None
     keycloak_introspection_url: Optional[str] = None
     keycloak_timeout_seconds: int = 5
+    # User MongoDB settings (Keycloak mode only)
+    user_mongodb_url: Optional[str] = None
+    user_mongodb_database: str = "users"
+    user_mongodb_collection: str = "users"
 
     # OpenAI API Key (required for Codex)
     openai_api_key: Optional[str] = None

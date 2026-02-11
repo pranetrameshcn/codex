@@ -29,6 +29,7 @@ from .models import (
     ThreadsResponse,
 )
 from .session_manager import session_manager
+from .user_store import close_users_collection, init_users_collection, verify_user_identity
 
 # Configure logging
 logging.basicConfig(
@@ -43,22 +44,44 @@ logger = logging.getLogger(__name__)
 # Helpers
 # =============================================================================
 
-def get_user_id(request: Request) -> str:
+def _get_requested_user_id(request: Request, body_user_id: Optional[str] = None) -> Optional[str]:
+    uid = request.query_params.get("user_id") or request.headers.get("X-User-Id")
+    if uid and uid.strip():
+        return uid.strip()
+    if body_user_id and body_user_id.strip():
+        return body_user_id.strip()
+    return None
+
+
+async def get_user_id(request: Request, body_user_id: Optional[str] = None) -> str:
     """Extract user_id from authenticated request.
 
     Resolution order:
-    1. Keycloak JWT 'sub' claim (always wins when auth is active)
-    2. Query param ?user_id= or X-User-Id header (when multi-user is active)
-    3. Single-user mode: return 'default'
-       Multi-user mode: reject with 400
+    1. Keycloak mode: require user_id (query/header/body) and verify against MongoDB
+    2. Non-Keycloak mode: Keycloak JWT 'sub' claim (if present)
+    3. Multi-user mode (non-Keycloak): query/header
+    4. Single-user mode: return 'default'
     """
     auth = getattr(request.state, "auth", None)
+    if settings.security_method == "Keycloak":
+        keycloak_id = auth.get("sub") if auth else None
+        if not keycloak_id:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        requested_user_id = _get_requested_user_id(request, body_user_id)
+        if not requested_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="user_id is required. Provide via query param (?user_id=), X-User-Id header, or request body.",
+            )
+        await verify_user_identity(keycloak_id, requested_user_id)
+        return requested_user_id
+
     if auth and auth.get("sub"):
         return auth["sub"]
     if settings.is_multi_user:
-        uid = request.query_params.get("user_id") or request.headers.get("X-User-Id")
-        if uid and uid.strip():
-            return uid.strip()
+        requested_user_id = _get_requested_user_id(request, body_user_id)
+        if requested_user_id:
+            return requested_user_id
         raise HTTPException(
             status_code=400,
             detail="user_id is required. Provide via query param (?user_id=), X-User-Id header, or request body.",
@@ -165,6 +188,9 @@ async def lifespan(app: FastAPI):
         settings.idle_timeout_seconds,
     )
 
+    if settings.security_method == "Keycloak":
+        await init_users_collection()
+
     # Start session cleanup loop
     await session_manager.start_cleanup_loop()
 
@@ -173,6 +199,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down")
     await session_manager.shutdown()
+    if settings.security_method == "Keycloak":
+        await close_users_collection()
 
 
 # =============================================================================
@@ -245,7 +273,7 @@ async def list_threads(
     cursor: Optional[str] = Query(default=None),
 ):
     """List all conversation threads for the authenticated user."""
-    user_id = get_user_id(request)
+    user_id = await get_user_id(request)
     logger.info("Listing threads (user=%s, limit=%d)", user_id, limit)
 
     try:
@@ -283,7 +311,7 @@ async def get_history(
     thread_id: str = Query(..., description="Thread ID"),
 ):
     """Get conversation history for a thread."""
-    user_id = get_user_id(request)
+    user_id = await get_user_id(request)
     logger.info("Getting history (user=%s, thread=%s)", user_id, thread_id)
 
     try:
@@ -350,12 +378,9 @@ async def chat(request: Request, body: ChatRequest):
     """
     # For /chat, body.user_id is also accepted as a fallback
     try:
-        user_id = get_user_id(request)
+        user_id = await get_user_id(request, body.user_id)
     except HTTPException:
-        if body.user_id and body.user_id.strip():
-            user_id = body.user_id.strip()
-        else:
-            raise
+        raise
     logger.info("Chat (user=%s, thread_id=%s, messages=%d)", user_id, body.thread_id, len(body.messages))
 
     prompt = body.get_prompt()

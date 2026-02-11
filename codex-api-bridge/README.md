@@ -93,6 +93,9 @@ The bridge manages per-user `codex app-server` subprocesses via the `SessionMana
 | `IDLE_TIMEOUT_SECONDS` | No | 300 | Seconds before idle sessions are cleaned up |
 | `CLEANUP_INTERVAL_SECONDS` | No | 60 | Interval between cleanup sweeps |
 | `ALLOW_USER_ID_OVERRIDE` | No | false | Allow user_id via query param / header (testing) |
+| `USER_MONGODB_URL` | No | - | MongoDB URL for users collection (Keycloak only) |
+| `USER_MONGODB_DATABASE` | No | users | MongoDB database name (Keycloak only) |
+| `USER_MONGODB_COLLECTION` | No | users | MongoDB collection name (Keycloak only) |
 
 ## Security (Keycloak)
 
@@ -104,6 +107,9 @@ Required env vars when `SECURITY_METHOD=Keycloak`:
 - `KEYCLOAK_REALM`
 - `KEYCLOAK_CLIENT_ID`
 - `KEYCLOAK_CLIENT_SECRET`
+- `USER_MONGODB_URL`
+- `USER_MONGODB_DATABASE`
+- `USER_MONGODB_COLLECTION`
 
 Optional:
 - `KEYCLOAK_INTROSPECTION_URL`
@@ -111,14 +117,18 @@ Optional:
 
 Example:
 ```bash
-curl -H "Authorization: Bearer <access_token>" http://localhost:8000/threads
+curl -H "Authorization: Bearer <access_token>" \
+  -H "X-User-Id: <app_user_id>" \
+  http://localhost:8000/threads
 ```
 
 ## Multi-User Mode
 
 When `SECURITY_METHOD=Keycloak` is set, the bridge operates in multi-user mode:
 
-- Each user (identified by the JWT `sub` claim) gets their own `codex app-server` subprocess
+- Each request must include the app `user_id` (query/header/body) which is verified against MongoDB
+- Requests are authorized only when `keycloak_id` (JWT `sub`) matches the MongoDB user record `_id`
+- Each verified user gets their own `codex app-server` subprocess
 - User data is isolated under `{BASE_DATA_DIR}/users/{user_id}/`
 - Sessions are created on first request and cleaned up after `IDLE_TIMEOUT_SECONDS` of inactivity
 - The `MAX_SESSIONS` setting caps the total number of concurrent user sessions (HTTP 503 when full)
