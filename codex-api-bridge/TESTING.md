@@ -330,24 +330,23 @@ curl "http://localhost:8000/threads?limit=10&cursor=CURSOR_FROM_PREVIOUS"
   "threads": [
     {
       "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "preview": "Hello! How can I help you today?",
+      "chat_name": "Hello! How can I help you today?",
       "created_at": "2025-01-15T10:30:00",
-      "updated_at": "2025-01-15T10:35:00"
-    },
-    {
-      "thread_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "preview": "Write a Python function...",
-      "created_at": "2025-01-14T09:00:00",
-      "updated_at": "2025-01-14T09:15:00"
+      "updated_at": "2025-01-15T10:35:00",
+      "message_count": 0,
+      "last_message_preview": "Hello! How can I help you today?",
+      "agent_type": "codex",
+      "project_id": null,
+      "project_name": null
     }
   ],
-  "next_cursor": null
+  "total_count": 1
 }
 ```
 
 **Notes:**
 - Returns empty `threads` array if no conversations exist
-- `next_cursor` is `null` when no more pages
+- `total_count` is the number of threads returned
 
 ---
 
@@ -375,27 +374,18 @@ curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID" \
 **Expected Response:**
 ```json
 {
-  "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "preview": "Hello! How can I help you today?",
-  "turns": [
-    {
-      "id": "turn_001",
-      "status": "completed",
-      "items": [
-        {
-          "type": "userMessage",
-          "id": "item_001",
-          "content": [{"type": "text", "text": "Hello"}]
-        },
-        {
-          "type": "agentMessage",
-          "id": "item_002",
-          "text": "Hello! How can I help you today?"
-        }
-      ]
-    }
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hello! How can I help you today?"}
   ],
-  "created_at": "2025-01-15T10:30:00"
+  "user_id": "test-user-1",
+  "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "message_count": 2,
+  "chat_name": "Hello! How can I help you today?",
+  "agent_type": "codex",
+  "project_id": null,
+  "project_name": null,
+  "usage_metadata": null
 }
 ```
 
@@ -456,23 +446,11 @@ curl -N -X POST http://localhost:8000/chat \
 
 **Expected Response (SSE stream):**
 ```
-data: {"type": "session", "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"}
+data: {"type":"delta","response_id":"resp_123","content":{"thread_id":"a1b2c3d4-e5f6-7890-abcd-ef1234567890"}}
 
-data: {"type": "turn.started", "turn": {"id": "turn_001", "status": "inProgress", "items": []}}
+data: {"type":"delta","response_id":"resp_123","content":{"text":"Hello"}}
 
-data: {"method": "item/started", "params": {"item": {"type": "agentMessage", "id": "item_001", "text": ""}}}
-
-data: {"method": "item/agentMessage/delta", "params": {"itemId": "item_001", "delta": "Hello"}}
-
-data: {"method": "item/agentMessage/delta", "params": {"itemId": "item_001", "delta": "! I'm"}}
-
-data: {"method": "item/agentMessage/delta", "params": {"itemId": "item_001", "delta": " Codex"}}
-
-data: {"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "item_001", "text": "Hello! I'm Codex, an AI assistant."}}}
-
-data: {"method": "turn/completed", "params": {"turn": {"id": "turn_001", "status": "completed"}}}
-
-data: [DONE]
+data: {"type":"done","response_id":"resp_123"}
 ```
 
 **Important:** Save the `thread_id` from the first `session` event to continue the conversation.
@@ -527,14 +505,25 @@ curl -X POST http://localhost:8000/chat \
 **Expected Response:**
 ```json
 {
-  "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "message": "2+2 equals 4.",
-  "events": [
-    {"type": "turn.started", "turn": {"id": "turn_001", "status": "inProgress"}},
-    {"method": "item/started", "params": {"item": {"type": "agentMessage", "id": "item_001"}}},
-    {"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "item_001", "text": "2+2 equals 4."}}},
-    {"method": "turn/completed", "params": {"turn": {"id": "turn_001", "status": "completed"}}}
-  ]
+  "id": "resp_123",
+  "type": "response",
+  "created_at": "2025-02-11T12:00:00Z",
+  "status": "ok",
+  "messages": [
+    {
+      "id": "msg_1",
+      "role": "assistant",
+      "content": {"type": "text", "text": "2+2 equals 4."}
+    }
+  ],
+  "actions": null,
+  "metadata": {
+    "user_id": "test-user-1",
+    "thread_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "agent_type": "codex",
+    "project_id": null,
+    "project_name": null
+  }
 }
 ```
 

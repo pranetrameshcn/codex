@@ -35,6 +35,15 @@ curl -N -X POST http://localhost:8000/chat \
   -d '{"messages": [{"content": "Hello!"}]}'
 ```
 
+Expected Response (SSE stream, truncated):
+```
+data: {"type":"delta","response_id":"resp_123","content":{"thread_id":"a1b2..."}}
+
+data: {"type":"delta","response_id":"resp_123","content":{"text":"Hello!"}}
+
+data: {"type":"done","response_id":"resp_123"}
+```
+
 ### Continue conversation
 
 ```bash
@@ -49,10 +58,48 @@ curl -N -X POST http://localhost:8000/chat \
 curl http://localhost:8000/threads
 ```
 
+Expected Response:
+```json
+{
+  "threads": [
+    {
+      "thread_id": "a1b2...",
+      "chat_name": "Hello! How can I help you today?",
+      "created_at": "2025-01-15T10:30:00",
+      "updated_at": "2025-01-15T10:35:00",
+      "message_count": 0,
+      "last_message_preview": "Hello! How can I help you today?",
+      "agent_type": "codex",
+      "project_id": null,
+      "project_name": null
+    }
+  ],
+  "total_count": 1
+}
+```
+
 ### Get history
 
 ```bash
 curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID"
+```
+
+Expected Response:
+```json
+{
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hello! How can I help you today?"}
+  ],
+  "user_id": "default",
+  "thread_id": "a1b2...",
+  "message_count": 2,
+  "chat_name": "Hello! How can I help you today?",
+  "agent_type": "codex",
+  "project_id": null,
+  "project_name": null,
+  "usage_metadata": null
+}
 ```
 
 ### Non-streaming response
@@ -61,6 +108,31 @@ curl "http://localhost:8000/history?thread_id=YOUR_THREAD_ID"
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"content": "What is 2+2?"}], "stream": false}'
+```
+
+Expected Response:
+```json
+{
+  "id": "resp_123",
+  "type": "response",
+  "created_at": "2025-02-11T12:00:00Z",
+  "status": "ok",
+  "messages": [
+    {
+      "id": "msg_1",
+      "role": "assistant",
+      "content": {"type": "text", "text": "2+2 equals 4."}
+    }
+  ],
+  "actions": null,
+  "metadata": {
+    "user_id": "default",
+    "thread_id": "a1b2...",
+    "agent_type": "codex",
+    "project_id": null,
+    "project_name": null
+  }
+}
 ```
 
 ## Architecture

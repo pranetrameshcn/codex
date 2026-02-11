@@ -108,7 +108,7 @@ class KeycloakAuthMiddleware(BaseHTTPMiddleware):
         if settings.security_method != "Keycloak":
             return await call_next(request)
 
-        if request.url.path in ("/", "/status"):
+        if request.url.path in ("/", "/status", "/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
 
         unauthorized = JSONResponse(status_code=401, content={"detail": "Unauthorized"})
