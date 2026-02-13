@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncIterator, Optional
 
+from pydantic import BaseModel
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -223,6 +224,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# =============================================================================
+# Stub request models (compatibility with cogentai-agent)
+# =============================================================================
+
+class RenameRequest(BaseModel):
+    new_chat_name: str
+
+
+class SearchRequest(BaseModel):
+    query: str
+    limit: int = 20
+
 app.add_middleware(KeycloakAuthMiddleware)
 
 app.add_middleware(
@@ -275,15 +289,41 @@ async def get_status():
     )
 
 
+@app.get("/models")
+async def list_models(
+    request: Request,
+    user_id: Optional[str] = Query(default=None, description="User ID"),
+    _auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Stub: List models (compatibility with cogentai-agent)."""
+    _ = await get_user_id(request, user_id)
+    logger.warning("models stub called")
+    return {
+        "providers": {
+            "openai": [{
+                "provider": "openai",
+                "id": "gpt-5.2-codex",
+                "name": "gpt-5.2-codex",
+                "capabilities": {},
+            }]
+        },
+        "default_model": "gpt-5.2-codex",
+        "model_selection_enabled": False,
+    }
+
+
 @app.get("/threads", response_model=AGUIThreadsResponse)
 async def list_threads(
     request: Request,
     user_id: Optional[str] = Query(default=None, description="User ID"),
     limit: int = Query(default=50, ge=1, le=200),
     cursor: Optional[str] = Query(default=None),
+    project_id: Optional[str] = Query(default=None, description="Project ID"),
     _auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ):
     """List all conversation threads for the authenticated user."""
+    if project_id:
+        raise HTTPException(status_code=400, detail="project_id is not supported by codex-api-bridge")
     user_id = await get_user_id(request)
     logger.info("Listing threads (user=%s, limit=%d)", user_id, limit)
 
@@ -319,6 +359,46 @@ async def list_threads(
     except Exception as e:
         logger.exception("Failed to list threads: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/conversations/{thread_id}/rename")
+async def rename_conversation(
+    request: Request,
+    thread_id: str,
+    body: RenameRequest,
+    user_id: Optional[str] = Query(default=None, description="User ID"),
+    _auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Stub: Rename a conversation (compatibility with cogentai-agent)."""
+    _ = await get_user_id(request, user_id)
+    logger.warning("rename_conversation stub called for thread=%s", thread_id)
+    return {"success": False, "detail": "Not implemented in codex-api-bridge"}
+
+
+@app.delete("/conversations/{thread_id}")
+async def delete_conversation(
+    request: Request,
+    thread_id: str,
+    user_id: Optional[str] = Query(default=None, description="User ID"),
+    _auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Stub: Delete a conversation (compatibility with cogentai-agent)."""
+    _ = await get_user_id(request, user_id)
+    logger.warning("delete_conversation stub called for thread=%s", thread_id)
+    return {"success": False, "detail": "Not implemented in codex-api-bridge"}
+
+
+@app.post("/thread/search")
+async def search_conversations(
+    request: Request,
+    body: SearchRequest,
+    user_id: Optional[str] = Query(default=None, description="User ID"),
+    _auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    """Stub: Search conversations (compatibility with cogentai-agent)."""
+    _ = await get_user_id(request, user_id)
+    logger.warning("thread_search stub called for query=%s", body.query)
+    return {"conversations": [], "total_found": 0, "query": body.query}
 
 
 @app.get("/history", response_model=HistoryResponse)

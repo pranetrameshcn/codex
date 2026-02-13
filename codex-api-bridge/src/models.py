@@ -1,6 +1,6 @@
 """All models for Codex API Bridge."""
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel
 
@@ -24,7 +24,7 @@ class ChatRequest(BaseModel):
     """Request for POST /chat."""
     thread_id: Optional[str] = None  # None = new conversation
     messages: List[ChatMessage]
-    model: Optional[str] = None
+    model: Optional[Union[str, Dict]] = None
     stream: bool = True
     user_id: Optional[str] = None  # Optional: override user_id from body
 

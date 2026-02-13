@@ -124,13 +124,24 @@ def build_tool_call_start(item: Dict[str, Any], response_id: str) -> Dict[str, A
 
 def build_tool_call_args(item: Dict[str, Any]) -> Dict[str, Any]:
     args = _extract_tool_args(item)
+    parsed_args: Dict[str, Any]
+    if isinstance(args, str):
+        try:
+            parsed_args = json.loads(args) if args else {}
+        except json.JSONDecodeError:
+            parsed_args = {"raw": args}
+    elif isinstance(args, dict):
+        parsed_args = args
+    else:
+        logger.warning("Unexpected tool args type in build_tool_call_args: %s", type(args))
+        parsed_args = {}
     return {
         "type": "TOOL_CALL_ARGS",
         "eventId": _uuid(),
         "event_id": _uuid(),
         "tool_call_id": extract_tool_call_id(item),
         "delta": args,
-        "arguments": args,
+        "arguments": parsed_args,
         "timestamp": _ts(),
     }
 
@@ -177,6 +188,40 @@ def build_tool_result_delta(item: Dict[str, Any], response_id: str) -> Dict[str,
     }
 
 
+def build_tool_calls_batch(item: Dict[str, Any], response_id: str) -> Dict[str, Any]:
+    """Batch wrapper used by cogentai UI (tool_calls)."""
+    return {
+        "type": "tool_calls",
+        "data": {
+            "thread_id": None,
+            "run_id": response_id,
+            "timestamp": _ts(),
+            "tool_calls": [{
+                "id": extract_tool_call_id(item),
+                "name": normalize_tool_name(item),
+                "args": _extract_tool_args(item),
+            }],
+        },
+    }
+
+
+def build_tool_results_batch(item: Dict[str, Any], response_id: str) -> Dict[str, Any]:
+    """Batch wrapper used by cogentai UI (tool_results)."""
+    return {
+        "type": "tool_results",
+        "data": {
+            "thread_id": None,
+            "run_id": response_id,
+            "timestamp": _ts(),
+            "tool_results": [{
+                "id": extract_tool_call_id(item),
+                "name": normalize_tool_name(item),
+                "content": _extract_tool_result(item),
+            }],
+        },
+    }
+
+
 def build_tool_output_delta(params: Dict[str, Any]) -> Dict[str, Any]:
     """For commandExecution/outputDelta and fileChange/outputDelta."""
     delta = params.get("delta", "")
@@ -188,7 +233,19 @@ def build_tool_output_delta(params: Dict[str, Any]) -> Dict[str, Any]:
         "event_id": _uuid(),
         "tool_call_id": params.get("itemId", ""),
         "delta": delta,
-        "arguments": None,
+        "arguments": {},
+        "timestamp": _ts(),
+    }
+
+
+def build_error_event(response_id: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Non-delta error event for UI compatibility (cogentai-style)."""
+    return {
+        "type": "error",
+        "thread_id": None,
+        "run_id": response_id,
+        "error": message,
+        "details": details or {},
         "timestamp": _ts(),
     }
 
@@ -377,7 +434,11 @@ def translate_event(
             return []
         if event_type == "error":
             msg = event.get("message") or str(event.get("error", "Unknown error"))
-            return [build_error_delta(response_id, msg), build_done_delta(response_id)]
+            return [
+                build_error_delta(response_id, msg),
+                build_error_event(response_id, msg),
+                build_done_delta(response_id),
+            ]
         logger.debug("Unknown synthetic event type: %s", event_type)
         return []
 
@@ -404,6 +465,7 @@ def translate_event(
                 build_tool_call_delta(item, response_id),
                 build_tool_call_start(item, response_id),
                 build_tool_call_args(item),
+                build_tool_calls_batch(item, response_id),
             ]
         if item.get("type") == "reasoning" and not state.get("reasoning_started"):
             state["reasoning_started"] = True
@@ -415,6 +477,7 @@ def translate_event(
         if is_tool_item(item):
             return [
                 build_tool_result_delta(item, response_id),
+                build_tool_results_batch(item, response_id),
                 build_tool_call_end(item),
             ]
         if item.get("type") == "reasoning" and state.get("reasoning_started"):
@@ -441,7 +504,7 @@ def translate_event(
             logger.debug("Transient error (will retry): %s", params.get("error", {}).get("message"))
             return []
         msg = params.get("error", {}).get("message", "Unknown error")
-        return [build_error_delta(response_id, msg)]
+        return [build_error_delta(response_id, msg), build_error_event(response_id, msg, params.get("error", {}))]
 
     # Token usage updates
     if method == "thread/tokenUsage/updated":
